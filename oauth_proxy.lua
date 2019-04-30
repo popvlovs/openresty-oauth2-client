@@ -11,7 +11,7 @@
 -- | lua_shared_dict oauth 10m;                                                                                                                  |
 -- |                                                                                                                                             |
 -- | # openresty lua lib                                                                                                                         |
--- | lua_package_path '/usr/local/openresty/lualib/?.lua;/usr/local/openresty/nginx/script/?.lua;/usr/local/openresty/nginx/script lib/?.lua;';  |
+-- | lua_package_path '/usr/local/openresty/lualib/?.lua;/usr/local/openresty/nginx/script/?.lua;/usr/local/openresty/nginx/script/lib/?.lua;';  |
 -- | lua_package_cpath '/usr/local/openresty/lualib/?.so;';                                                                                      |
 -- +---------------------------------------------------------------------------------------------------------------------------------------------+
 -- 
@@ -22,26 +22,95 @@ local cjson = require("cjson")
 local string = require "string"
 local resolver = require "resty.dns.resolver"
 local httpc = http.new()
+local urlParser = require "net.url"
+
+-- Get user info from cache (throttle)
+local function get_cached_userinfo()
+    local cache = ngx.shared.oauth
+    userInfo, _ = cache:get("userInfo")
+    if userInfo ~= nil then
+        return cjson.decode(userInfo)
+    end
+end
+
+local function set_cached_userinfo(userinfo)
+    local cache = ngx.shared.oauth
+    cache:set("userInfo", userinfo)
+end
+
+-- Check access token and get user info
+local function check_access_token(access_token)
+    ngx.log(ngx.INFO, "Check access token from OAuth server")
+    local url = string.format("%s?token=%s", config.checkTokenUri, access_token)
+    local resp, err = httpc:request_uri(url, {
+        method = "GET"
+    })
+    if err then
+        local msg = "Invalid access: error on get check token, " .. err
+        ngx.log(ngx.ERR, msg)
+        return false
+    end
+    if resp.status ~= 200 then
+        local msg = "Invalid access: error on get check token, status=" .. resp.status .. ", body=" .. resp.body
+        ngx.log(ngx.ERR, msg)
+        return false
+    end
+    set_cached_userinfo(resp.body)
+    return true
+end
 
 -- TODO: Validate TOKEN if exist
 local function validate_token()
-    local cookie = ngx.var.http_cookie
-    if cookie == nil then
+    local token = ngx.var.cookie_OAUTH_TOKEN
+    if token == nil then
         return false
     end
-    _, _, token = string.find(cookie, "ACCESS_TOKEN=(.*?);")
-    if token ~= nil then
+    if token == nil then
+        -- No token, go authorize
+        ngx.log(ngx.INFO, "No access token, go authorize")
+        return false
+    else
+        ngx.log(ngx.INFO, "Current access token is: "..token)
+    end
+
+    local userInfo = get_cached_userinfo()
+    if userInfo == nil then
+        -- Token exist but no userInfo cache, start remote check
+        ngx.log(ngx.INFO, "Token exist but cached user info missed, start check access_token")
+        -- Check failed? go authorize
+        local success = check_access_token(token)
+        if not success then
+            return false
+        else
+            userInfo = get_cached_userinfo()
+            if userInfo == nil then
+                return false
+            end
+        end
+    end
+    -- Token exist and userInfo exist, start expiration check
+    local expired = userInfo["exp"] or userInfo["exipred"]
+    if ngx.time() > expired then
+        ngx.log(ngx.INFO, "The token has been expired in: "..tostring(expired))
+        cache:delete("userInfo")
         return false
     end
     return true
-    -- TODO: Check if exist in verified cache
-    -- TODO: Remote check token
+end
+
+-- TODO: Get username from access_token
+local function get_current_user()
+    local userInfo = get_cached_userinfo()
+    if userInfo ~= nil then
+        return userInfo["username"]
+    end
+    return "anonymousUser"
 end
 
 -- Check permit uri 
 local function need_authorize(uri)
     if validate_token() then
-        return
+        return false
     end
     for _, regexp in pairs(config.permitUriRegexps) do
         if ngx.re.match(uri, regexp, "isjo") then
@@ -95,7 +164,7 @@ local function get_access_token(authorizationCode)
     end
 
     if resp.status ~= 200 then
-        local msg = "Invalid access: error on get access token, status=" .. resp.status .. ", body=" .. response.body
+        local msg = "Invalid access: error on get access token, status=" .. resp.status .. ", body=" .. resp.body
         ngx.log(ngx.ERR, msg)
         response(ngx.HTTP_UNAUTHORIZED, msg)
     end
@@ -112,6 +181,30 @@ end
 -- Check is authentication code response
 local function has_authorization_code()
     return ngx.var.arg_code ~= nil
+end
+
+-- Check is get current user request
+local function is_get_current_user()
+    for _, v in ipairs(config.getCurrentUserEndpoint) do
+        if ngx.var.uri == v then
+            return true
+        end
+    end
+    return false
+end
+
+-- Check api should redirect header, to redirect api-request to its referer
+local function should_redirect_to_referer()
+    local headers = ngx.req.get_headers()
+    local referer = urlParser.parse(ngx.var.http_referer or "/")
+    return headers and headers["x-redirect-policy"] == "401-redirect-referer" and ngx.var.uri ~= referer.path
+end
+
+-- Redirect to referer or homepage
+local function redirect_to_referer()
+    local referer = ngx.var.http_referer or "/"
+    ngx.log(ngx.INFO, string.format("Unauthorized web api request %s, policy is %s, redirect to its referer: %s", ngx.var.request_uri, ngx.req.get_headers()["x-redirect-policy"], referer))
+    ngx.redirect(referer)
 end
 
 -- Replay cached request
@@ -145,6 +238,7 @@ local function authorize()
             -- Reqeust access_token
             local accessToken = get_access_token(authorizationCode)
             ngx.ctx.access_token = accessToken
+            check_access_token(accessToken)
             replay_cached_request()
         else
             -- Authorize request
@@ -156,11 +250,23 @@ local function authorize()
             authorizationRequst = string.format(authorizationRequst, clientId, redirectUri, csrfState)
             ngx.redirect(authorizationRequst)
         end
+    elseif is_get_current_user() then
+        -- Return current user
+        local username = get_current_user()
+        local result = { statusCode = 0, messages = {}, data = { user=username }, username=username }
+        cjson.encode_empty_table_as_object(false)
+        ngx.say(cjson.encode(result))
+        return ngx.exit(ngx.status)
     elseif need_authorize(ngx.var.uri) then
-        -- Cache request and replay on authentication success
-        ngx.shared.oauth["cachedRequest"] = ngx.var.request_uri
-        ngx.log(ngx.INFO, string.format("Start authorization for requst: %s", ngx.var.request_uri))
-        goto_authentication_entrypoint()
+        if should_redirect_to_referer() then
+            -- Web api request, redirect to its referer as an authorization entrypoint
+            redirect_to_referer()
+        else
+            -- Cache request and replay on authentication success
+            ngx.shared.oauth["cachedRequest"] = ngx.var.request_uri
+            ngx.log(ngx.INFO, string.format("Start authorization for requst: %s", ngx.var.request_uri))
+            goto_authentication_entrypoint()
+        end
     end
 end
 

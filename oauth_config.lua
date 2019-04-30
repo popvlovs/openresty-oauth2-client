@@ -24,6 +24,8 @@ return {
     clientSecret = "cb8539f3-aced-46bf-a44c-ab6e8d8e27c0",
     -- oauth client authorize entry point & redirect uri
     redirectUriEntrypoint = "/login",
+    -- oauth client get current user endpoint
+    getCurrentUserEndpoint = { "/system/user/current", "_api/current/user" },
     -- oauth client permit url(s), regular-expression supported
     permitUriRegexps = {
         -- important! permit redirect uri to avoid too many redirection error
