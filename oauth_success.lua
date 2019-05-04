@@ -8,7 +8,7 @@
 
 if ngx.ctx.access_token ~= nil then
     local cookie = string.format("OAUTH_TOKEN=%s; path=/;HttpOnly;", ngx.ctx.access_token)
-    ngx.log(ngx.INFO, "Write access_token to Set-Cookie: "..cookie)
+    ngx.log(ngx.INFO, "Write access_token to Set-Cookie: "..string.format("OAUTH_TOKEN=**%s; path=/;HttpOnly;", ngx.ctx.access_token:sub(-15)))
     ngx.header["Set-Cookie"] = cookie
     ngx.ctx.access_token = nil
 end

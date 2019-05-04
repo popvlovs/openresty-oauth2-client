@@ -5,16 +5,6 @@
 -- Time: 16:50
 -- To make a OAuth2.0 client authorization proxy
 -- 
--- Usage: Add config into nginx.conf as follows:
--- +---------------------------------------------------------------------------------------------------------------------------------------------+
--- | # oauth shared dict                                                                                                                         |
--- | lua_shared_dict oauth 10m;                                                                                                                  |
--- |                                                                                                                                             |
--- | # openresty lua lib                                                                                                                         |
--- | lua_package_path '/usr/local/openresty/lualib/?.lua;/usr/local/openresty/nginx/script/?.lua;/usr/local/openresty/nginx/script/lib/?.lua;';  |
--- | lua_package_cpath '/usr/local/openresty/lualib/?.so;';                                                                                      |
--- +---------------------------------------------------------------------------------------------------------------------------------------------+
--- 
 
 local http = require "resty.http"
 local config = require "oauth_config"
@@ -70,7 +60,7 @@ local function validate_token()
         ngx.log(ngx.INFO, "No access token, go authorize")
         return false
     else
-        ngx.log(ngx.INFO, "Current access token is: "..token)
+        ngx.log(ngx.INFO, "Current access token is: **"..token:sub(-15))
     end
 
     local userInfo = get_cached_userinfo()
@@ -184,7 +174,7 @@ local function has_authorization_code()
 end
 
 -- Check is get current user request
-local function is_get_current_user()
+local function is_current_user_request()
     for _, v in ipairs(config.getCurrentUserEndpoint) do
         if ngx.var.uri == v then
             return true
@@ -193,18 +183,44 @@ local function is_get_current_user()
     return false
 end
 
--- Check api should redirect header, to redirect api-request to its referer
+-- Check HTTP header X-Redirect-Policy
 local function should_redirect_to_referer()
     local headers = ngx.req.get_headers()
     local referer = urlParser.parse(ngx.var.http_referer or "/")
-    return headers and headers["x-redirect-policy"] == "401-redirect-referer" and ngx.var.uri ~= referer.path
+    if headers and headers["x-redirect-policy"] then
+        if ngx.var.uri ~= referer.path then
+            ngx.log(ngx.INFO, "Find http-header [X-Redirect-Policy: "..headers["x-redirect-policy"].."], current uri: "..ngx.var.uri..", referer: "..referer.path..", will redirect to: "..referer.path)
+        else
+            ngx.log(ngx.INFO, "Find http-header [X-Redirect-Policy: "..headers["x-redirect-policy"].."], current uri: "..ngx.var.uri..", referer: "..referer.path..", end redirect loop")
+        end
+        return ngx.var.uri ~= referer.path
+    end
+    return false
 end
 
 -- Redirect to referer or homepage
 local function redirect_to_referer()
+    local headers = ngx.req.get_headers()
+    if not headers or not headers["x-redirect-policy"] then
+        ngx.log(ngx.ERR, "Header X-Redirect-Policy not found!")
+        return
+    end
     local referer = ngx.var.http_referer or "/"
-    ngx.log(ngx.INFO, string.format("Unauthorized web api request %s, policy is %s, redirect to its referer: %s", ngx.var.request_uri, ngx.req.get_headers()["x-redirect-policy"], referer))
-    ngx.redirect(referer)
+    if headers["x-redirect-policy"] == "401-redirect-referer" then
+        -- Response 401, for "fetch" or other methods that cannot handle 302 redirect properly
+        ngx.log(ngx.INFO, string.format("Response 401 with redirect url: %s", referer))
+        local result = { statusCode = 3, messages = {}, data = { redirectUrl=referer } }
+        cjson.encode_empty_table_as_object(false)
+        ngx.status = ngx.HTTP_UNAUTHORIZED
+        ngx.say(cjson.encode(result))
+        return ngx.exit(ngx.status)
+    elseif headers["x-redirect-policy"] == "302-redirect-referer" then
+        -- Response 302 redirect
+        ngx.log(ngx.INFO, string.format("Redirect referer: %s", referer))
+        ngx.redirect(referer)
+    else
+        ngx.log(ngx.ERR, "Undefined redirect policy: "..headers["x-redirect-policy"])
+    end
 end
 
 -- Replay cached request
@@ -250,11 +266,12 @@ local function authorize()
             authorizationRequst = string.format(authorizationRequst, clientId, redirectUri, csrfState)
             ngx.redirect(authorizationRequst)
         end
-    elseif is_get_current_user() then
-        -- Return current user
+    elseif is_current_user_request() then
+        -- Intercept current user request
         local username = get_current_user()
         local result = { statusCode = 0, messages = {}, data = { user=username }, username=username }
         cjson.encode_empty_table_as_object(false)
+        ngx.status = ngx.HTTP_OK
         ngx.say(cjson.encode(result))
         return ngx.exit(ngx.status)
     elseif need_authorize(ngx.var.uri) then
