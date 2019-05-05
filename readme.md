@@ -1,7 +1,7 @@
 # Openresty OAuth2.0 集成手册
 ## 集成环境
 ### OAuth 客户端环境
-- 客户端环境使用标准的Openresty集成包：[ftp下载地址]()
+- 客户端环境使用标准的Openresty集成包（ver: 1.11.2.3）：[ftp下载地址](ftp://ftp.nj.hansight.net/buildresource/saas/openresty_1.11.2.3.tgz)
 
 ### OAuth 认证服务器
 - 当前仅对接Hansight统一认证中心 https://oauth.hansight.com
