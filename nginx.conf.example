@@ -26,7 +26,7 @@ http {
   # oauth shared dict
   lua_shared_dict oauth 10m;
   # openresty lua lib
-  lua_package_path '/usr/local/openresty/lualib/?.lua;/usr/local/openresty/nginx/script/?.lua;/usr/local/openresty/nginx/script/lib/?.lua;';
+  lua_package_path '/usr/local/openresty/lualib/?.lua;';
   lua_package_cpath '/usr/local/openresty/lualib/?.so;';
   # set dns resolver
   resolver 172.31.38.183;

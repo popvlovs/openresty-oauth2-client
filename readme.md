@@ -8,10 +8,6 @@
 - 如需对接第三方OAuth认证服务，要进行一些改造（暂无需求）
 
 ## 集成步骤
-- 将lua脚本拷贝到Openresty目录中，一般是
-    ```shell
-    \cp -rf oauth_config.lua oauth_proxy.lua oauth_success.lua lib /usr/local/openresty/nginx/script
-    ```
 - 修改nginx.conf
 
     ```nginx
@@ -21,7 +17,7 @@
         # oauth shared dict
         lua_shared_dict oauth 10m;
         # openresty lua lib
-        lua_package_path '/usr/local/openresty/lualib/?.lua;/usr/local/openresty/nginx/script/?.lua;/usr/local/openresty/nginx/script/lib/?.lua;';
+        lua_package_path '/usr/local/openresty/lualib/?.lua;';
         lua_package_cpath '/usr/local/openresty/lualib/?.so;';
         # set dns resolver
         resolver 172.31.38.183;
@@ -30,8 +26,6 @@
         lua_ssl_trusted_certificate /etc/pki/tls/certs/ca-bundle.crt;
         ...
         server {
-            # 【在此添加】在Server段中应用lua脚本 oauth_proxy.lua
-            access_by_lua_file  /usr/local/openresty/nginx/script/oauth_proxy.lua;
             # Blahblah...          
             proxy_http_version  1.1;
             proxy_set_header    Connection        "";
@@ -46,8 +40,15 @@
             proxy_read_timeout 300;
             proxy_connect_timeout 300;
             proxy_pass          http://webservice$request_uri;
-            # 【在此添加】在Server段中应用lua脚本 oauth_success.lua
-            header_filter_by_lua_file /usr/local/openresty/nginx/script/oauth_success.lua;
+            # 【在此添加】在Server段中应用lua脚本
+            access_by_lua_block {
+              local oauth = require "oauth.oauth_proxy"
+              oauth.config.host = "http://kibana.anquanyi.com"
+              oauth.config.clientId = "555c3a27-54ba-4da5-b84f-7f634db3711d"
+              oauth.config.clientSecret = "3bf22142-db83-4172-8c55-cb54041cf186"
+              oauth.authorize()
+            }
+            header_filter_by_lua_file /usr/local/openresty/lualib/oauth/oauth_success.lua;
         }
     }
     ```

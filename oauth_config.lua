@@ -11,7 +11,7 @@ local oauthServerUrl = "https://oauth.hansight.com"
 
 return {
     -- oauth client host (to make redirect uri)
-    host = "http://52.81.79.12",
+    host = "http://xxx.hansight.com",
     -- oauth server authorize endpoint
     userAuthorizationUri = oauthServerUrl .. "/oauth/authorize",
     -- oauth server access token endpoint
