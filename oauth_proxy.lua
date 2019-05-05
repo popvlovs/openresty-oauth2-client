@@ -13,7 +13,6 @@ local http = require "resty.http"
 local cjson = require("cjson")
 local string = require "string"
 local resolver = require "resty.dns.resolver"
-local httpc = http.new()
 local urlParser = require "net.url"
 
 local function merge_config()
@@ -43,6 +42,7 @@ end
 local function check_access_token(access_token)
     ngx.log(ngx.INFO, "Check access token from OAuth server")
     local url = string.format("%s?token=%s", _M.config.checkTokenUri, access_token)
+    local httpc = http.new()
     local resp, err = httpc:request_uri(url, {
         method = "GET"
     })
@@ -93,6 +93,7 @@ local function validate_token()
     local expired = userInfo["exp"] or userInfo["exipred"]
     if ngx.time() > expired then
         ngx.log(ngx.INFO, "The token has been expired in: "..tostring(expired))
+        local cache = ngx.shared.oauth
         cache:delete("userInfo")
         return false
     end
@@ -152,6 +153,7 @@ local function get_access_token(authorizationCode)
     local clientSecret = _M.config.clientSecret
     local redirectUri = _M.config.host .. _M.config.redirectUriEntrypoint
     local state = ngx.shared.oauth["csrfState"]
+    local httpc = http.new()
     local resp, err = httpc:request_uri(_M.config.accessTokenUri, {
         method = "POST",
         body = string.format("grant_type=authorization_code&client_id=%s&client_secret=%s&redirect_uri=%s&code=%s&state=%s", clientId, clientSecret, redirectUri, authorizationCode, state),
@@ -159,6 +161,7 @@ local function get_access_token(authorizationCode)
             ["Content-Type"] = "application/x-www-form-urlencoded"
         }
     })
+    ngx.log(ngx.INFO, "request uri: ".._M.config.accessTokenUri..", body: "..string.format("grant_type=authorization_code&client_id=%s&client_secret=%s&redirect_uri=%s&code=%s&state=%s", clientId, clientSecret, redirectUri, authorizationCode, state))
     if err then
         local msg = "Invalid access: error on get access token, " .. err
         ngx.log(ngx.ERR, msg)
