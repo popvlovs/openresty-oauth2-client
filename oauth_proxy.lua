@@ -15,15 +15,6 @@ local string = require "string"
 local resolver = require "resty.dns.resolver"
 local urlParser = require "net.url"
 
-local function merge_config()
-    if ngx.ctx.options then
-        local _permitUriRegexps = _M.config.permitUriRegexps
-        table.merge(_M.config, ngx.ctx.options)
-        table.merge(_M.config.permitUriRegexps, _permitUriRegexps)
-    end
-end
-merge_config()
-
 -- Get user info from cache (throttle)
 local function get_cached_userinfo()
     local cache = ngx.shared.oauth
